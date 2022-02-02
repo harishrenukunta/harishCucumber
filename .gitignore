@@ -1,0 +1,10 @@
+/.idea/
+/target/
+/build/
+*.iml
+*.class
+*.ctxt
+*.jar
+*.war
+*.ear
+/.gradle/
