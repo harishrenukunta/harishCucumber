@@ -1,0 +1,275 @@
+#!/usr/bin/env groovy
+
+def gitCreds = 'GITHUB_SCMADM_SSH_KEY'
+//def jdktool = 'jdk8'
+
+def stageStashName = "HydraCucumberStageStash${BUILD_TAG}"
+def mailEnv
+def vaultUrl = "https://vaultdev.rw.harish.com:8200"
+library identifier: 'common-pipeline-components@master',
+    retriever: modernSCM([
+        $class : 'GitSCMSource',
+        remote  : 'git@github.harish.com:harish-org/common-pipeline-components.git',
+        credentailsId: 'GITHUB_SCMADM_SSH_KKEY'])
+def remote_url = 'git@github.harish.com:'
+def repo = 'harish-org/app-system-sdet.git'
+def gitls
+
+def hariEnv = ["sureshv3, u84257cc9fb0b1f4,harishrenukunta@yahoo.com, https://portsl-hari.yahooglobalnetwork.com/okta, https://portal-hari.yahooglobalnetwork.com, https://xchange-hari.cf-ssb-z3-dev.harish.com, https://portal-hari.yahooglobalnetwork.com/logout/logout.html,N"] as String[]
+def hari3Env = ["slokhan, ud0adb299cec6430, someshwareilokhande@yahoo.com, https://portal-hari3.yahooglobalnetwork.com/okta, https://portal-hari3.yahooglobalnetwork.com,https://xhcange-hari3.cf-ssb-z3-dev.harish.com, https://portal-hari3.yahooglobalnetwork.com/logout/logout.html, Y"] as String[]
+
+
+def browserNameList = "chrome\ninternet explorer"
+def browserVersion = "ltest\nllx32"
+def dnRegressionTag1 = ["@transactionSearch", "@disputeDetail", "@trr", "@arbitration", "@chargeback_reversal", "@compliance_review", "@compliance_response", "@compliance_decision"] as String[]
+def dnRegressionTag2 = ["@chargeback"] as String[]
+def dnRegressionTag3 = ["@prearbitration_response", "@arbitration_withdrawal", "@arbitration_response", "@representment"] as String[]
+def SOAPdnRegressionTag4 = ["@trrresponse", "@arbitration_decision", "@prearbitration_withdrawal", "@batch_prearbrequest", "@ui_representment"] as String[]
+def UIdnRegressionTags4=["@trrresponse", "@arbitration_decision", "@prearbitration_withdrawal", "@prearbitration"] as String[]
+
+def dnRegressionTag4=[] as String[]
+def branch, browser, version, PROXYNAME, USERNAME, AUTH_KEY, xchangeUrl
+def currentEnvironment, regressionSuite
+def hostUrl, appUrl
+def cbtInd, oktInd
+def regressionSuiteName = "UI\nSOAP"
+
+node {
+    sshagent(credentails: ['GITHUB_SCMADM_SSH_KEY']){
+        gitls = sh(returnStdout: true, script: "git ls-remote --heads " + remote_url + repo + " | awk '{print \$2}' | sort -r -V | sed 's@refs/heads/@@'").trim()
+    }
+    pipeline {
+        agent { node { lable 'cd-subnet'}}
+        options { ansiColor('xterm')}
+        environment {
+            REPO = 'harish-org/app-system-sdet.git'
+            MODULE_NAME = 'app-system-sdet'
+            //JAVA_HOME = tool name : 'jdk8'
+            //PATH = "JAVA_HOME/bin:$PATH"
+        }
+
+        stages {
+            stage('clean_workspace') {
+                steps {
+                    deleteDir()
+                }
+            }
+
+            stage("prompts parameters for DN UI Test Execution"){
+                steps {
+                    script {
+                        try{
+                            timeout(time: 300, unit: 'SECONDS'){
+                                def userInput = input (message: 'Choose parameters!', ok: 'SET', parameters: [
+                                    choice(choices: gitls, description: 'Select branch', name: 'SelectBranch'),
+                                    choice(choices: browserNameList, description: 'Select browser name', name: 'BrowserName'),
+                                    choice(choices: browserVersion, description: 'Enter version', name: 'BroserVersion'),
+                                    choice(choices: regressionSuiteName, desription: 'Select Regressio Suite', name: 'RegressionSuite'),
+                                ])
+                                branch = userInput['SelectBranch']
+                                browser = userInput['BrowserName']
+                                version = userInput['BrowserVersion']
+                                regressionSuite = userInput['RegressionSuite']
+
+                                if("#${JOB_NAME}".contains("hari")){
+                                    mailEnv = 'hari'
+                                    currentEnvironment = hariEnv[0]
+                                }
+                                if("#${JOB_NAME}".contains("hari3")){
+                                    mailEnv = 'hari3'
+                                    currentEnvironment = hari3Env[0]
+                                }
+                                if("#${JOB_NAME}".contains("HFE")){
+                                    mailEnv = 'HFE'
+                                    currentEnvironment = stgEnv[0]
+                                }
+                            }catch( err){//timeout reached or input false
+                                def user = err.getCauses()[0].getUser()
+                                if('SYSTEM' == user.toString()){ //SYSTEM means time logout
+                                    branch = 'disputes_21.0_dn'
+                                    browser = 'chrome'
+                                    version = 'latest'
+                                    regressionSuite = 'SOAP'
+                                    currentBuild.result = 'SUCCESS'
+
+                                }else {
+                                    userInput = false
+                                    echo "Aborted by: [${user}]"
+                                    currentBuild.result = 'ABORTED'
+                                }
+                            }finally{
+                                gitCheckoutRepo(remote_url + repo, branch)
+                                cbtInd = 'Y'
+                                PROXYNAME = currentEnvironment.tokenize(",")[0]
+                                AUTH_KEY = currentEnvironment.tokenize(",")[1]
+                                USERNAME = currentEnvironment.tokenize(",")[2]
+                                hostUrl = currentEnvironment.tokenize(",")[3]
+                                appUrl = currentEnvironment.tokenize(",")[4]
+                                xchangeUrl = currentEnvironment.tokenize(",")[5]
+                                logoutUrl = currentEnvironment.tokenize(",")[6]
+                                oktaInd = currentEnvironment.tokenize(",")[7]
+                                if("${mailEnv}" == "hari" && "${oktaInd}" == "N" && "${cbtInd}" == "Y"){
+                                    hostUrl = 'https://d-login.yahooglobalnetwor.com/cbttest'
+                                }
+                                if("${mailEnv}" == "hari" && "${oktaInd}" == "Y" && "${cbtInd}" == "N"){
+                                    hostUrl = 'https://portal-hari.dn.harish.com'
+                                    appUrl = 'https://portal-hari.dn.harish.com'
+                                }
+                                if("${mailEnv}" == "HFE" && "${oktaInd}" == "N" && "${cbtInd}" == "Y"){
+                                    hostUrl = 'https://d-login.yahooglobalnetwork.com/cbthari2'
+                                }
+                                if("${mailEnv}" == "HFE" && "${oktaInd}" == "Y" && "${cbtInd}" == "N"){
+                                    hostUrl = 'https://portal-hari2.dgn.harish.com'
+                                    appUrl = 'https://portal-hari2.dgn.harish.com'
+                                }
+                                if("${regressionSuite}" == "SOAP"){
+                                    dnRegressionTag4 = SOAPdnRegressionTag4
+                                }
+                                if("${regressionSuite}" == "UI"){
+                                    dnRegressionTag4 = UIdnRegressionTags4
+                                }
+                                if("${regressionSuite}" == "UI"){
+                                    dnRegressionTag4 = UIdnRegressionTags4
+                                }
+                                echo "Parameters :" + mailEnv + " , " + branch + " , " + browser + " , " + version + " , " + regressionSuite + " , " + oktaInd
+                                currentBuild.displayName = "DN_Regression_" + branch + "_" + browser + "#${BUILD_NUMBER}"
+                            }
+
+                        }
+                    }
+                }
+            }
+
+            stage("Set up environment variables for DN UI Regression"){
+                steps{
+                    script{
+                        def node = tool name: '8.9.0', type: 'jenkins.plugins.nodejs.tools.NodeJSInstallation'
+                        env.PATH = "${node}/bin:${env.PATH}"
+                        echo sh(returnStdout: true, script: "chmod +x ${WORKSPACE}/gradlew")
+                        echo sh(returnStdout: true, script: '${WORKSPACE}/gradlew :eTR -Dcucumber.options="--tags @sdetTEST_JwtGenerator " -Dtest.environment="' + mailEnv + '"')
+                    }
+                }
+           }
+
+           stage("Executing DN UI Regression on CBT"){
+                steps {
+                    script {
+                        try {
+                            echo 'Running DN test cases'
+                            def secretPath = "secret/hydtsvc/app/dispute/sdet/hari/ui"
+                            def screts = [[
+                                    $class: 'VaultSecret', path:secretPath, secretValues:
+                                [
+                                    [$class: 'VaultSecretValue', envVar: 'PASSWORD', vaultKey: 'password']
+                                ]
+                            ]]
+
+                            wrap([$class: 'DFSVaultBuildWrapper', vaultSecrets: secrets, roleId: "${JENKINS_harish_CPPSECURITY_ROLE_ID_DEV}", secretId: "", vaultUrl: vaultUrl, exposeAuthtoken: true, wrap: true]){
+                                withEnv([
+                                    "PASSWORD=${env.PASSWORD}"
+                                ]){
+                                    sh """
+                                        cd UITest
+                                        node ./node_modules/webdriver-manager --versions.chrome 2.36 --ignore_ssl --proxy http://proxy-dev.harish.com:8080 update
+                                        """
+                                    parallel (
+                                        'DN-UI-Regression1': {
+                                            dnRegressionTag1.each { currentSuite ->
+                                                sh """
+                                                    cd UITest
+                                                    chmod +x ./node_modules/webdriver-manager
+                                                    chmod +x ./node_modules/protractor/bin/protractor
+                                                    ./node_modules/protractor/bin/protractor config/regressionCBTConfig.js --webDriverProxy http://${PROXYNAME}:xyz@proxy-user.harish.com:8080/ --capabilities.username=${USERNAME} --capabilities.password=${AUTH_KEY} --capabilities.browserName="${browser}" --capabilities.name="${browser}" --capabilities.max_duration="14400" --capabiltiies.screen_resolution=\1920X1440\" --params.baseUrl=${hostUrl} --params.password=${env.PASSWORD} --params.XCHANGE_URL=${xchageUrl} --params.appUrl=${appUrl} --params.logoutUrl=${logoutUrl} --params.runOnCBT=${cbtInd} --params.runOnOKTA=${oktaInd} --cucumberOpts.tags=${currentSuite} || error=true
+                                                   """
+
+                                            }
+                                        },
+
+                                        'DN-UI-Regression2': {
+                                            dnRegressionTag2.each { currentSuite ->
+                                                sh """
+                                                cd UITest
+                                                chmod +x ./node_modules/webdriver-manager
+                                                chmod +x ./node_modules/protractor/bin/protractor
+                                                ./node_modules/protractor/bin/protractor config/regressionCBTConfig.js --webDriverProxy http://${PROXYNAME}:xyz@proxy-user.harish.com:8080/ --capabilities.username=${USERNAME} --capabilities.password=${AUTH_KEY} --capabilities.browserName="${browser}" --capabilities.name="${browser}" --capabilities.max_duration="14400" --capabiltiies.screen_resolution=\1920X1440\" --params.baseUrl=${hostUrl} --params.password=${env.PASSWORD} --params.XCHANGE_URL=${xchageUrl} --params.appUrl=${appUrl} --params.logoutUrl=${logoutUrl} --params.runOnCBT=${cbtInd} --params.runOnOKTA=${oktaInd} --cucumberOpts.tags=${currentSuite} || error=true
+                                                """
+                                            }
+                                        },
+
+                                        'DN-UI-Regression3':{
+                                            dnRegressionTgs3.each { currentSuite ->
+                                                sh """
+                                                 cd UITest
+                                                 chmod +x ./node_modules/webdriver-manager
+                                                 chmod +x ./node_modules/protractor/bin/protractor
+                                               ./node_modules/protractor/bin/protractor config/regressionCBTConfig.js --webDriverProxy http://${PROXYNAME}:xyz@proxy-user.harish.com:8080/ --capabilities.username=${USERNAME} --capabilities.password=${AUTH_KEY} --capabilities.browserName="${browser}" --capabilities.name="${browser}" --capabilities.max_duration="14400" --capabiltiies.screen_resolution=\1920X1440\" --params.baseUrl=${hostUrl} --params.password=${env.PASSWORD} --params.XCHANGE_URL=${xchageUrl} --params.appUrl=${appUrl} --params.logoutUrl=${logoutUrl} --params.runOnCBT=${cbtInd} --params.runOnOKTA=${oktaInd} --cucumberOpts.tags=${currentSuite} || error=true
+                                                """
+                                            }
+                                        }
+                                    )
+                                }
+                            }catch( Exception ex){
+                                echo "RESULT: ${currentBuild.result}" + ex
+                            }
+                        }
+                    }
+                }
+           }
+
+           stage("Executing DN SOAP Regression"){
+                when{ expression { regressionSuite == 'SOAP'}}
+                    steps {
+                        script {
+                            try {
+                                echo sh(returnStdout: true, script: "chmod +x ${WORKSPACE}/gradlew")
+                                echo sh(returnStdout: true, script: '${WORKSPACE}/gradlew :eTRSoap -Dcucumber.options="--tags @soapRegression " -Dtest.environment="' + mailEnv.toLowerCase() + '"')
+                            }
+                            catch(Exception ex){
+                                echo "RESULT: ${currentBuild.result}" + ex
+                            }
+                        }
+                    }
+           }
+
+           stage("Cucumber Reports for DN UI & SOAP test cases"){
+                steps {
+                    script {
+                        echo 'Generating DN Cucumber Report'
+                        cucumber fileIncludePattern: '', jsonReportDirectory: 'UITest/reports/cucumber-results/json-output-folder/', sortingMethod: 'ALPHABETICAL'
+                    }
+                }
+           }
+
+           stage('Mail results'){
+                steps {
+                    script {
+                        log.info("Mailing results...")
+                        date = new Date()
+                        def emailSubject = "${mailEnv} : Disputes DN UI Regression report ${date}"
+                        def emailMsg = ''
+                        emailMsg += """<p>Please click on the below link to verify today's Disputes DN UI Regresion Result: </p><p><a href=${BUILD_URL}cucumber-html-reports/overview-features.html>Cucumber Report for build ${BUILD_NUMBER} </a></p>"""
+                        emailext (
+                            mimeType: "text/html",
+                            to: 'harish_r9@yahoo.co.uk',
+                            subject: emailSubject,
+                            body: emailMsg
+                        )
+                    }
+                }
+           }
+
+           stage('Mail teams'){
+                steps{
+                    script {
+                        if(mailEnv == 'Devint2'){
+                            office365ConnectorSend(message: "Please click on the inline link to verify today's Disputes UI Regression Result #${env.BUILD_NUMBER} (<${env.BUILD_URL}cucumber-html-reports/overview-features.html>)", webhookUrl: 'https://outlook.office.com/webhook/b77e840e-1aa0-4afc-9018-be49')
+                        }
+                        if(mailEnv == 'hari') || (mailEnv == 'hari3'){
+                            office365ConnectorSend(message: "Please click on the inline link to verify today's Disputes UI Regression Result #${env.BUILD_NUMBER} (<${env.BUILD_URL}cucumber-html-reports/overview-features.html>)", webhookUrl: 'https://outlook.office.com/webhook/b77e840e-1aa0-4afc-9018-be49')
+                        }
+                    }
+                }
+           }
+        }
+    }
+}
